@@ -23,6 +23,7 @@ type JSONRPCBatchResponseHandler = func([]*JSONRPCResponse)
 type JSONRPCRequestHandler = func(interface{}) (interface{}, *JSONRPCError)
 type JSONRPCIDGenerator = func() interface{}
 type JSONRPCRequestSender = func(*JSONRPCRequest) *JSONRPCError
+type JSONRPCNotificationHandler = func(*JSONRPCResponse)
 
 type JSONRPCError struct {
 	
@@ -49,6 +50,8 @@ type JSONRPCServer interface {
 	
 	handleRequest(*JSONRPCRequest) *JSONRPCResponse
 	
+	WithNotificationHandler(JSONRPCNotificationHandler) JSONRPCServer
+	
 	HasMethod(string) bool
 	AddMethod(string, JSONRPCRequestHandler)
 	RemoveMethod(string)
@@ -63,6 +66,7 @@ type JSONRPCClient interface {
 	
 	emitResponse(*JSONRPCResponse)
 	
+	WithNotificationHandler(JSONRPCNotificationHandler) JSONRPCClient
 	WithIDGenerator(JSONRPCIDGenerator) JSONRPCClient
 	
 	Request(string, interface{}, time.Duration) (*JSONRPCResponse, *JSONRPCError) // with timeout
@@ -101,6 +105,10 @@ func NewJSONRPCServer(fn JSONRPCResponseHandler) JSONRPCServer {
 	
 	s := &server{}
 	
+	s.HandleNotification = func(response *JSONRPCResponse) {
+		// ignore notification response
+	}
+	
 	s.HandleResponse = fn
 	s.Methods = make(map[string]JSONRPCRequestHandler)
 	
@@ -118,6 +126,10 @@ func NewJSONRPCClient(fn JSONRPCRequestSender) JSONRPCClient {
 		return requestIndex
 	}
 	
+	c.HandleNotification = func(response *JSONRPCResponse) {
+		// ignore notification response
+	}
+	
 	c.SendRequest = fn
 	c.ChannelsByNumber = make(map[float64]chan *JSONRPCResponse)
 	c.ChannelsByString = make(map[string]chan *JSONRPCResponse)
@@ -130,8 +142,14 @@ func NewJSONRPCClient(fn JSONRPCRequestSender) JSONRPCClient {
 
 type server struct {
 	
+	HandleNotification JSONRPCNotificationHandler
 	HandleResponse JSONRPCResponseHandler
 	Methods map[string]JSONRPCRequestHandler
+}
+func (s *server) WithNotificationHandler(fn JSONRPCNotificationHandler) JSONRPCServer {
+	
+	s.HandleNotification = fn
+	return s
 }
 func (s *server) HasMethod(name string) bool {
 	
@@ -174,20 +192,27 @@ func (s *server) ReceiveSingle(request *JSONRPCRequest) {
 		
 		s.HandleResponse(response)
 		
-	} // else: Notification request, no response should be given
+	} else { // Notification request, no response should be given
+		
+		s.HandleNotification(response)
+	}
 }
 func (s *server) ReceiveMultiple(requests []*JSONRPCRequest) {
 	
-	responses := make([]*JSONRPCResponse, len(requests))
+	// responses := make([]*JSONRPCResponse, len(requests))
 	
-	for i, request := range requests {
+	for _, request := range requests {
 		
-		responses[i] = s.handleRequest(request)
+		res := s.handleRequest(request)
 		
-		if responses[i].ID != nil {
+		if res.ID != nil {
 			
-			s.HandleResponse(responses[i])
-		} // else: Notification request, no response should be given
+			s.HandleResponse(res)
+			
+		} else { // Notification request, no response should be given
+			
+			s.HandleNotification(res)
+		}
 	}
 }
 
@@ -216,10 +241,16 @@ func (s *server) handleRequest(request *JSONRPCRequest) *JSONRPCResponse {
 type client struct {
 	
 	mu sync.Mutex
+	HandleNotification JSONRPCNotificationHandler
 	GenerateID JSONRPCIDGenerator
 	SendRequest JSONRPCRequestSender
 	ChannelsByNumber map[float64]chan *JSONRPCResponse
 	ChannelsByString map[string]chan *JSONRPCResponse
+}
+func (c *client) WithNotificationHandler(fn JSONRPCNotificationHandler) JSONRPCClient {
+	
+	c.HandleNotification = fn
+	return c
 }
 func (c *client) WithIDGenerator(fn JSONRPCIDGenerator) JSONRPCClient {
 	
@@ -392,8 +423,9 @@ func (c *client) emitResponse(response *JSONRPCResponse) {
 			isNumericID = true
 			
 			if math.IsNaN(responseNumberID) {
-				// NaN is not allowed
-				return // ignore this invalid response
+				// NaN is not allowed, maybe a notification?
+				c.HandleNotification(response)
+				return
 			}
 			
 		case string:
@@ -401,14 +433,18 @@ func (c *client) emitResponse(response *JSONRPCResponse) {
 			responseStringID = v
 			
 			if responseStringID == "" {
-				// empty string ID is not allowed
-				return // ignore this invalid response
+				// empty string ID is not allowed, maybe a notification?
+				c.HandleNotification(response)
+				return
 			}
 		
 		default:
 			
 			// invalid ID type (must be string or float64)
-			return // ignore this invalid response
+			// response ID is maybe absent or null, this must be a notification instead:
+			
+			c.HandleNotification(response)
+			return
 	}
 	
 	if isNumericID {
