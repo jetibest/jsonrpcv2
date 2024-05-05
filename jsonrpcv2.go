@@ -25,7 +25,7 @@ type IDGenerator = func() any
 type NotificationHandler = func(*Notification)
 type RequestHandler = func(any) (any, *Error)
 
-type MessageSender = func(*Message) *Error
+type MessageSender = func(*Message, ...any) *Error
 // type BatchMessageSender = func([]*Message) *Error
 
 
@@ -250,10 +250,10 @@ type Server interface {
 	
 	ReceiveString(string)
 	ReceiveBytes(*[]byte)
-	ReceiveMessage(*Message)
+	ReceiveMessage(*Message, ...any)
 //	ReceiveBatchMessage([]*Message)
-	ReceiveRequest(*Request)
-	ReceiveNotification(*Notification)
+	ReceiveRequest(*Request, ...any)
+	ReceiveNotification(*Notification, ...any)
 }
 type Client interface {
 	
@@ -264,15 +264,14 @@ type Client interface {
 	WithMessageSender(MessageSender) Peer
 //	WithBatchMessageSender(BatchMessageSender) Peer
 	
-	Request(string, any, time.Duration) (*Response, *Error) // with timeout
-	Notify(string, any) *Error // won't expect any response
+	Request(string, any, time.Duration, ...any) (*Response, *Error) // with timeout
+	Notify(string, any, ...any) *Error // won't expect any response
 	
 	ReceiveString(string)
 	ReceiveBytes(*[]byte)
-	ReceiveMessage(*Message)
+	ReceiveMessage(*Message, ...any)
 //	ReceiveBatchMessage([]*Message)
-	ReceiveRequest(*Request)
-	ReceiveNotification(*Notification)
+	ReceiveResponse(*Response)
 }
 // Peer implements both Server and Client interfaces
 type Peer interface {
@@ -291,15 +290,15 @@ type Peer interface {
 	RemoveMethod(string)
 	
 	// Client:
-	Request(string, any, time.Duration) (*Response, *Error) // with timeout
-	Notify(string, any) *Error // won't expect any response
+	Request(string, any, time.Duration, ...any) (*Response, *Error) // with timeout
+	Notify(string, any, ...any) *Error // won't expect any response
 	
 	ReceiveString(string)
 	ReceiveBytes(*[]byte)
-	ReceiveMessage(*Message)
+	ReceiveMessage(*Message, ...any)
 //	ReceiveBatchMessage([]*Message)
-	ReceiveRequest(*Request)
-	ReceiveNotification(*Notification)
+	ReceiveRequest(*Request, ...any)
+	ReceiveNotification(*Notification, ...any)
 	ReceiveResponse(*Response)
 }
 type peer struct {
@@ -480,13 +479,13 @@ func (p *peer) ReceiveBytes(data *[]byte) {
 	}
 	*/
 }
-func (p *peer) ReceiveMessage(message *Message) {
+func (p *peer) ReceiveMessage(message *Message, options ...any) {
 		
 	notification := NewNotificationFromMessage(message)
 	
 	if notification != nil {
 		
-		p.ReceiveNotification(notification)
+		p.ReceiveNotification(notification, options)
 		return
 	}
 	
@@ -494,7 +493,7 @@ func (p *peer) ReceiveMessage(message *Message) {
 	
 	if request != nil {
 		
-		p.ReceiveRequest(request)
+		p.ReceiveRequest(request, options)
 		return
 	}
 	
@@ -561,7 +560,7 @@ func (p *peer) ReceiveBatchMessage(messages []*Message) {
 	}
 }
 */
-func (p *peer) ReceiveRequest(request *Request) {
+func (p *peer) ReceiveRequest(request *Request, options ...any) {
 	
 	if request != nil {
 		
@@ -571,7 +570,7 @@ func (p *peer) ReceiveRequest(request *Request) {
 			
 			message := NewMessageFromResponse(response)
 			
-			p.SendMessage(message)
+			p.SendMessage(message, options...)
 		}
 	}
 }
@@ -582,7 +581,7 @@ func (p *peer) ReceiveResponse(response *Response) {
 		p.emitResponse(response)
 	}
 }
-func (p *peer) ReceiveNotification(notification *Notification) {
+func (p *peer) ReceiveNotification(notification *Notification, options ...any) {
 	
 	if p.HandleNotification != nil {
 		
@@ -603,7 +602,7 @@ func (p *peer) RemoveMethod(name string) {
 	
 	delete(p.Methods, name)
 }
-func (p *peer) Notify(method string, params any) *Error {
+func (p *peer) Notify(method string, params any, options ...any) *Error {
 	
 	if p.SendMessage == nil {
 		
@@ -614,9 +613,9 @@ func (p *peer) Notify(method string, params any) *Error {
 	
 	message := NewMessageFromRequest(request)
 	
-	return p.SendMessage(message)
+	return p.SendMessage(message, options)
 }
-func (p *peer) Request(method string, params any, timeout time.Duration) (*Response, *Error) {
+func (p *peer) Request(method string, params any, timeout time.Duration, options ...any) (*Response, *Error) {
 	
 	if p.SendMessage == nil {
 		
@@ -695,7 +694,7 @@ func (p *peer) Request(method string, params any, timeout time.Duration) (*Respo
 	// build request, and pass request to the request sender
 	request := &Request{JSONRPC: "2.0", ID: requestID, Method: method, Params: params}
 	message := NewMessageFromRequest(request)
-	err := p.SendMessage(message)
+	err := p.SendMessage(message, options...)
 	
 	// if immediate error sending the request, passthrough the error
 	if err != nil {
