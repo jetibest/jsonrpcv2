@@ -248,8 +248,8 @@ type Server interface {
 	AddMethod(string, RequestHandler)
 	RemoveMethod(string)
 	
-	ReceiveString(string)
-	ReceiveBytes(*[]byte)
+	ReceiveString(string, ...any)
+	ReceiveBytes(*[]byte, ...any)
 	ReceiveMessage(*Message, ...any)
 //	ReceiveBatchMessage([]*Message)
 	ReceiveRequest(*Request, ...any)
@@ -267,8 +267,8 @@ type Client interface {
 	Request(string, any, time.Duration, ...any) (any, *Error) // with timeout
 	Notify(string, any, ...any) *Error // won't expect any response
 	
-	ReceiveString(string)
-	ReceiveBytes(*[]byte)
+	ReceiveString(string, ...any)
+	ReceiveBytes(*[]byte, ...any)
 	ReceiveMessage(*Message, ...any)
 //	ReceiveBatchMessage([]*Message)
 	ReceiveResponse(*Response)
@@ -293,8 +293,8 @@ type Peer interface {
 	Request(string, any, time.Duration, ...any) (any, *Error) // with timeout
 	Notify(string, any, ...any) *Error // won't expect any response
 	
-	ReceiveString(string)
-	ReceiveBytes(*[]byte)
+	ReceiveString(string, ...any)
+	ReceiveBytes(*[]byte, ...any)
 	ReceiveMessage(*Message, ...any)
 //	ReceiveBatchMessage([]*Message)
 	ReceiveRequest(*Request, ...any)
@@ -448,19 +448,19 @@ func (p *peer) WithBatchMessageSender(fn BatchMessageSender) Peer {
 }
 */
 
-func (p *peer) ReceiveString(data string) {
+func (p *peer) ReceiveString(data string, options ...any) {
 	
 	arr := []byte(data)
-	p.ReceiveBytes(&arr)
+	p.ReceiveBytes(&arr, options...)
 }
-func (p *peer) ReceiveBytes(data *[]byte) {
+func (p *peer) ReceiveBytes(data *[]byte, options ...any) {
 	
 	var message Message
 	err := json.Unmarshal(*data, &message)
 	
 	if err == nil {
 		
-		p.ReceiveMessage(&message)
+		p.ReceiveMessage(&message, options...)
 		return
 	}
 	
@@ -485,7 +485,7 @@ func (p *peer) ReceiveMessage(message *Message, options ...any) {
 	
 	if notification != nil {
 		
-		p.ReceiveNotification(notification, options)
+		p.ReceiveNotification(notification, options...)
 		return
 	}
 	
@@ -493,7 +493,7 @@ func (p *peer) ReceiveMessage(message *Message, options ...any) {
 	
 	if request != nil {
 		
-		p.ReceiveRequest(request, options)
+		p.ReceiveRequest(request, options...)
 		return
 	}
 	
