@@ -6,406 +6,360 @@ import (
 	"time"
 	"sync"
 	"math"
+//	"log"
+//	"fmt"
 )
 
 // Types:
 
-const jsonRPCParseErrorCode int = -32700
-const jsonRPCInvalidRequestErrorCode int = -32600
-const jsonRPCMethodNotFoundErrorCode int = -32601
-const jsonRPCInternalErrorCode int = -32603
-const JSONRPCInvalidParamsErrorCode int = -32602
-const JSONRPCServerErrorCode int = -32000
-const jsonRPCRequestTimeoutErrorCode int = -32001
+const ParseErrorCode int = -32700
+const InvalidRequestErrorCode int = -32600
+const MethodNotFoundErrorCode int = -32601
+const InternalErrorCode int = -32603
+const InvalidParamsErrorCode int = -32602
+const ServerErrorCode int = -32000
+const RequestTimeoutErrorCode int = -32001
 
-type JSONRPCResponseHandler = func(interface{})
-type JSONRPCBatchResponseHandler = func([]*JSONRPCResponse)
-type JSONRPCRequestHandler = func(interface{}) (interface{}, *JSONRPCError)
-type JSONRPCIDGenerator = func() interface{}
-type JSONRPCRequestSender = func(*JSONRPCRequest) *JSONRPCError
-type JSONRPCNotificationHandler = func(*JSONRPCResponse)
 
-type JSONRPCError struct {
+type IDGenerator = func() any
+type NotificationHandler = func(*Notification)
+type RequestHandler = func(any) (any, *Error)
+
+type MessageSender = func(*Message) *Error
+// type BatchMessageSender = func([]*Message) *Error
+
+
+// Object structs
+
+type Error struct {
 	
 	Code int              `json:"code"`
 	Message string        `json:"message"`
-	Data interface{}      `json:"data,omitempty"`
+	Data any              `json:"data,omitempty"`
 }
-type JSONRPCResponse struct {
+type Response struct {
 	
 	JSONRPC string        `json:"jsonrpc"`
-	ID interface{}        `json:"id"`
-	Result interface{}    `json:"result,omitempty"`
-	Error *JSONRPCError   `json:"error,omitempty"`
+	ID any                `json:"id"`
+	Result any            `json:"result,omitempty"`
+	Error *Error          `json:"error,omitempty"`
 }
-type JSONRPCRequest struct {
+type Notification struct {
 	
 	JSONRPC string        `json:"jsonrpc"`
-	ID interface{}        `json:"id"`
-	Method interface{}    `json:"method"`
-	Params interface{}    `json:"params,omitempty"`
+	Method any            `json:"method"`
+	Params any            `json:"params,omitempty"`
 }
-
-type JSONRPCServer interface {
+type Request struct {
 	
-	handleRequest(*JSONRPCRequest) *JSONRPCResponse
-	
-	WithNotificationHandler(JSONRPCNotificationHandler) JSONRPCServer
-	
-	HasMethod(string) bool
-	AddMethod(string, JSONRPCRequestHandler)
-	RemoveMethod(string)
-	
-	ReceiveBytes(*[]byte) // only supports a single JSONRPCRequest
-	ReceiveString(string) // only supports a single JSONRPCRequest
-	ReceiveSingle(*JSONRPCRequest)
-	ReceiveMultiple([]*JSONRPCRequest)
+	JSONRPC string        `json:"jsonrpc"`
+	ID any                `json:"id"`
+	Method any            `json:"method"`
+	Params any            `json:"params,omitempty"`
 }
-
-type JSONRPCClient interface {
+type Message struct {
 	
-	emitResponse(*JSONRPCResponse)
-	
-	WithNotificationHandler(JSONRPCNotificationHandler) JSONRPCClient
-	WithIDGenerator(JSONRPCIDGenerator) JSONRPCClient
-	
-	Request(string, interface{}, time.Duration) (*JSONRPCResponse, *JSONRPCError) // with timeout
-	Notify(string, interface{}) *JSONRPCError // won't expect any response
-	
-	ReceiveBytes(*[]byte) // only supports a single JSONRPCResponse
-	ReceiveString(string) // only supports a single JSONRPCResponse
-	ReceiveSingle(*JSONRPCResponse)
-	ReceiveMultiple([]*JSONRPCResponse)
+	JSONRPC string        `json:"jsonrpc"`
+	ID any                `json:"id,omitempty"`
+	Result any            `json:"result,omitempty"`
+	Method any            `json:"method,omitempty"`
+	Params any            `json:"params,omitempty"`
+	Error *Error          `json:"error,omitempty"`
 }
 
 
-// Functions:
+// Constructors:
 
-func NewJSONRPCInvalidParamsError() *JSONRPCError {
+func NewInvalidParamsError() *Error {
 	
-	err := JSONRPCError{JSONRPCInvalidParamsErrorCode, "Invalid params", nil}
-	
-	return &err
+	return &Error{Code: InvalidParamsErrorCode, Message: "Invalid params"}
 }
-func NewJSONRPCServerError(message string) *JSONRPCError {
+func NewServerError(message string) *Error {
 	
-	err := JSONRPCError{JSONRPCServerErrorCode, message, nil}
-	
-	return &err
+	return &Error{Code: ServerErrorCode, Message: message}
 }
 
-func NewJSONRPCError(code int, message string) *JSONRPCError {
+func NewNotificationFromMessage(message *Message) *Notification {
 	
-	err := JSONRPCError{code, message, nil}
-	
-	return &err
-}
-
-func NewJSONRPCServer(fn JSONRPCResponseHandler) JSONRPCServer {
-	
-	s := &server{}
-	
-	s.HandleNotification = func(response *JSONRPCResponse) {
-		// ignore notification response
+	if message == nil || (message.Method == nil) {
+		
+		// Message is not a valid Notification
+		return nil
+	} else {
+		
+		switch message.Method.(type) {
+			
+			case string:
+			default:
+				// Method must be string type, or else Message is not a valid Notification
+				return nil
+		}
 	}
 	
-	s.HandleResponse = fn
-	s.Methods = make(map[string]JSONRPCRequestHandler)
+	if message.ID != nil {
+		
+		// a Notification cannot have an ID
+		return nil
+	}
 	
-	return s
+	return &Notification{
+		JSONRPC: message.JSONRPC,
+		Method: message.Method,
+		Params: message.Params,
+	}
 }
 
-func NewJSONRPCClient(fn JSONRPCRequestSender) JSONRPCClient {
+func NewMessageFromRequest(request *Request) *Message {
 	
-	c := &client{}
+	if request == nil {
+		
+		return nil
+	}
+	
+	return &Message{
+		JSONRPC: request.JSONRPC,
+		ID: request.ID,
+		Method: request.Method,
+		Params: request.Params,
+	}
+}
+
+func NewMessageFromResponse(response *Response) *Message {
+	
+	if response == nil {
+		
+		return nil
+	}
+	
+	return &Message{
+		JSONRPC: response.JSONRPC,
+		ID: response.ID,
+		Result: response.Result,
+		Error: response.Error,
+	}
+}
+
+func NewRequestFromMessage(message *Message) *Request {
+	
+	if message == nil || (message.Method == nil) {
+		
+		// Message is not a valid Request
+		return nil
+	} else {
+		
+		switch message.Method.(type) {
+			
+			case string:
+			default:
+				// Method must be string type, or else Message is not a valid Request
+				return nil
+		}
+	}
+	
+	if message.ID == nil {
+		
+		// a Request must have an ID
+		return nil
+	}
+	
+	return &Request{
+		JSONRPC: message.JSONRPC,
+		ID: message.ID,
+		Method: message.Method,
+		Params: message.Params,
+	}
+}
+
+func NewResponseFromMessage(message *Message) *Response {
+	
+	if message == nil || (message.Result == nil && message.Error == nil) {
+		
+		// Message is not a Response
+		return nil
+	}
+	
+	return &Response{
+		JSONRPC: message.JSONRPC,
+		ID: message.ID,
+		Result: message.Result,
+		Error: message.Error,
+	}
+}
+
+func NewPeer() Peer {
+	
+	p := &peer{}
 	
 	// implement default ID generator:
-	var requestIndex float64 = 1
-	c.GenerateID = func() interface{} {
+	var requestIndex float64 = 0
+	p.GenerateID = func() any {
 		requestIndex++
 		return requestIndex
 	}
 	
-	c.HandleNotification = func(response *JSONRPCResponse) {
-		// ignore notification response
+	p.ChannelsByNumber = make(map[float64]chan *Response)
+	p.ChannelsByString = make(map[string]chan *Response)
+	
+	p.Methods = make(map[string]RequestHandler)
+	
+	return p
+}
+
+func NewClient() Client {
+	
+	c := &peer{}
+	
+	// implement default ID generator:
+	var requestIndex float64 = 0
+	c.GenerateID = func() any {
+		requestIndex++
+		return requestIndex
 	}
 	
-	c.SendRequest = fn
-	c.ChannelsByNumber = make(map[float64]chan *JSONRPCResponse)
-	c.ChannelsByString = make(map[string]chan *JSONRPCResponse)
+	c.ChannelsByNumber = make(map[float64]chan *Response)
+	c.ChannelsByString = make(map[string]chan *Response)
 	
 	return c
 }
 
-
-// JSONRPCServer implementation:
-
-type server struct {
+func NewServer() Server {
 	
-	HandleNotification JSONRPCNotificationHandler
-	HandleResponse JSONRPCResponseHandler
-	Methods map[string]JSONRPCRequestHandler
-}
-func (s *server) WithNotificationHandler(fn JSONRPCNotificationHandler) JSONRPCServer {
+	s := &peer{}
 	
-	s.HandleNotification = fn
+	s.Methods = make(map[string]RequestHandler)
+	
 	return s
 }
-func (s *server) HasMethod(name string) bool {
-	
-	_, ok := s.Methods[name]
-	return ok
-}
-func (s *server) AddMethod(name string, fn JSONRPCRequestHandler) {
-	
-	s.Methods[name] = fn
-}
-func (s *server) RemoveMethod(name string) {
-	
-	delete(s.Methods, name)
-}
-func (s *server) ReceiveBytes(data *[]byte) {
-	
-	var request JSONRPCRequest
-	err := json.Unmarshal(*data, &request)
-	
-	if err != nil {
-		// strictly speaking, no response should be returned, as a response requires a valid ID
-		// s.HandleResponse(&JSONRPCResponse{"2.0", nil, nil, NewJSONRPCError(jsonRPCParseErrorCode, "Parse error")})
-	} else {
-		s.ReceiveSingle(&request)
-	}
-}
-func (s *server) ReceiveString(data string) {
-	
-	arr := []byte(data)
-	s.ReceiveBytes(&arr)
-}
-func (s *server) ReceiveSingle(request *JSONRPCRequest) {
-	
-//	encodedRequest, _ := json.Marshal(*request)
-//	fmt.Printf("Incoming JSON-RPC-2.0 request: %+v\n", string(encodedRequest))
-	
-	response := s.handleRequest(request)
-	
-	if response.ID != nil {
-		
-		s.HandleResponse(response)
-		
-	} else { // Notification request, no response should be given
-		
-		s.HandleNotification(response)
-	}
-}
-func (s *server) ReceiveMultiple(requests []*JSONRPCRequest) {
-	
-	// responses := make([]*JSONRPCResponse, len(requests))
-	
-	for _, request := range requests {
-		
-		res := s.handleRequest(request)
-		
-		if res.ID != nil {
-			
-			s.HandleResponse(res)
-			
-		} else { // Notification request, no response should be given
-			
-			s.HandleNotification(res)
-		}
-	}
-}
 
-func (s *server) handleRequest(request *JSONRPCRequest) *JSONRPCResponse {
+
+// Class implementations:
+
+type Server interface {
 	
-	fn, ok := s.Methods[request.Method.(string)]
+	processRequest(*Request) *Response
+	
+	WithNotificationHandler(NotificationHandler) Peer
+	WithMessageSender(MessageSender) Peer
+//	WithBatchMessageSender(BatchMessageSender) Peer
+	
+	HasMethod(string) bool
+	AddMethod(string, RequestHandler)
+	RemoveMethod(string)
+	
+	ReceiveString(string)
+	ReceiveBytes(*[]byte)
+	ReceiveMessage(*Message)
+//	ReceiveBatchMessage([]*Message)
+	ReceiveRequest(*Request)
+	ReceiveNotification(*Notification)
+}
+type Client interface {
+	
+	emitResponse(*Response)
+	
+	WithNotificationHandler(NotificationHandler) Peer
+	WithIDGenerator(IDGenerator) Peer
+	WithMessageSender(MessageSender) Peer
+//	WithBatchMessageSender(BatchMessageSender) Peer
+	
+	Request(string, any, time.Duration) (*Response, *Error) // with timeout
+	Notify(string, any) *Error // won't expect any response
+	
+	ReceiveString(string)
+	ReceiveBytes(*[]byte)
+	ReceiveMessage(*Message)
+//	ReceiveBatchMessage([]*Message)
+	ReceiveRequest(*Request)
+	ReceiveNotification(*Notification)
+}
+// Peer implements both Server and Client interfaces
+type Peer interface {
+	
+	processRequest(*Request) *Response // Server-specific
+	emitResponse(*Response) // Client-specific
+	
+	WithNotificationHandler(NotificationHandler) Peer
+	WithIDGenerator(IDGenerator) Peer // Client-specific
+	WithMessageSender(MessageSender) Peer
+//	WithBatchMessageSender(BatchMessageSender) Peer
+	
+	// Server:
+	HasMethod(string) bool
+	AddMethod(string, RequestHandler)
+	RemoveMethod(string)
+	
+	// Client:
+	Request(string, any, time.Duration) (*Response, *Error) // with timeout
+	Notify(string, any) *Error // won't expect any response
+	
+	ReceiveString(string)
+	ReceiveBytes(*[]byte)
+	ReceiveMessage(*Message)
+//	ReceiveBatchMessage([]*Message)
+	ReceiveRequest(*Request)
+	ReceiveNotification(*Notification)
+	ReceiveResponse(*Response)
+}
+type peer struct {
+	
+	mu sync.Mutex
+	
+	HandleNotification NotificationHandler
+	
+	SendMessage MessageSender
+//	SendBatchMessage BatchMessageSender
+	
+	GenerateID IDGenerator
+	ChannelsByNumber map[float64]chan *Response
+	ChannelsByString map[string]chan *Response
+	
+	Methods map[string]RequestHandler
+}
+func (p *peer) processRequest(request *Request) *Response {
+	
+	fn, ok := p.Methods[request.Method.(string)]
 	
 	if ok {
 		result, err := fn(request.Params)
 		
 		if err != nil {
 			
-			return &JSONRPCResponse{"2.0", request.ID, nil, err}
+			return &Response{JSONRPC: "2.0", ID: request.ID, Error: err}
 			
 		} else {
 			
-			return &JSONRPCResponse{"2.0", request.ID, result, nil}
+			return &Response{JSONRPC: "2.0", ID: request.ID, Result: result}
 		}
 	} else {
 		
-		return &JSONRPCResponse{"2.0", request.ID, nil, NewJSONRPCError(jsonRPCMethodNotFoundErrorCode, "Method not found")}
+		return &Response{JSONRPC: "2.0", ID: request.ID, Error: &Error{Code: MethodNotFoundErrorCode, Message: "Method not found"}}
 	}
 }
-
-// JSONRPCClient implementation:
-type client struct {
+/*
+func (p *peer) emitBatchResponse(responses []*Response) {
 	
-	mu sync.Mutex
-	HandleNotification JSONRPCNotificationHandler
-	GenerateID JSONRPCIDGenerator
-	SendRequest JSONRPCRequestSender
-	ChannelsByNumber map[float64]chan *JSONRPCResponse
-	ChannelsByString map[string]chan *JSONRPCResponse
-}
-func (c *client) WithNotificationHandler(fn JSONRPCNotificationHandler) JSONRPCClient {
-	
-	c.HandleNotification = fn
-	return c
-}
-func (c *client) WithIDGenerator(fn JSONRPCIDGenerator) JSONRPCClient {
-	
-	c.GenerateID = fn
-	return c
-}
-func (c *client) Notify(method string, params interface{}) *JSONRPCError {
-	
-	return c.SendRequest(&JSONRPCRequest{"2.0", nil, method, params})
-}
-func (c *client) Request(method string, params interface{}, timeout time.Duration) (*JSONRPCResponse, *JSONRPCError) {
-	
-	ch := make(chan *JSONRPCResponse, 1) // buffered
-	
-	requestID := c.GenerateID()
-	
-	if requestID == nil {
-		return nil, NewJSONRPCError(jsonRPCInternalErrorCode, "Internal error")
+	if responses == nil || len(responses) == 0 {
+		return // ignore invalid or empty responses
 	}
 	
-	isNumericID := false
-	var requestNumberID float64
-	var requestStringID string
+	// we don't return []*Response for RequestMultiple([]*Request) []*Response
+	// but instead we use:
 	
-	switch v := requestID.(type) {
-		case float64:
-			
-			requestNumberID = v
-			isNumericID = true
-			
-			if math.IsNaN(requestNumberID) {
-				// NaN is not allowed
-				return nil, NewJSONRPCError(jsonRPCInternalErrorCode, "Internal error")
-			}
-			
-		case string:
-			
-			requestStringID = v
-			
-			if requestStringID == "" {
-				// empty string ID is not allowed
-				return nil, NewJSONRPCError(jsonRPCInternalErrorCode, "Internal error")
-			}
-		
-		default:
-			
-			// invalid ID type (must be string or float64)
-			return nil, NewJSONRPCError(jsonRPCInternalErrorCode, "Internal error")
-	}
+	ch := make(chan *Response)
+	b := peer.BatchRequestBuilder()
+	b.Append("method1", {params}, func (res *Response) {
+		// handle response here
+	})
+	b.Append("method2", {params}, ch)
+	b.Append("method2", {params}, ch)
+	b.Send(time.Duration(10) * time.Second) // send adds responses to channel, until close(ch) at the end
 	
-	c.mu.Lock()
-	if isNumericID {
+	for res := range ch {
 		
-		_, ok := c.ChannelsByNumber[requestNumberID]
-		
-		if ok {
-			// id already exists, that's very bad
-			return nil, NewJSONRPCError(jsonRPCInternalErrorCode, "Internal error")
-		} else {
-			
-			c.ChannelsByNumber[requestNumberID] = ch
-		}
-		
-	} else {
-		
-		_, ok := c.ChannelsByString[requestStringID]
-		
-		if ok {
-			// id already exists, that's very bad
-			return nil, NewJSONRPCError(jsonRPCInternalErrorCode, "Internal error")
-		} else {
-			
-			c.ChannelsByString[requestStringID] = ch
-		}
-	}
-	c.mu.Unlock()
-	
-	// build request, and pass request to the request sender
-	err := c.SendRequest(&JSONRPCRequest{"2.0", requestID, method, params})
-	
-	// if immediate error sending the request, passthrough the error
-	if err != nil {
-		
-		c.mu.Lock()
-		if isNumericID {
-			delete(c.ChannelsByNumber, requestNumberID)
-		} else {
-			delete(c.ChannelsByString, requestStringID)
-		}
-		c.mu.Unlock()
-		
-		return nil, err
-	}
-	
-	// return the result, or timeout err if timeout
-	select {
-		case res := <- ch:
-			
-			c.mu.Lock()
-			if isNumericID {
-				delete(c.ChannelsByNumber, requestNumberID)
-			} else {
-				delete(c.ChannelsByString, requestStringID)
-			}
-			c.mu.Unlock()
-			
-			if res.Error != nil {
-				return nil, res.Error
-			} else {
-				return res, nil
-			}
-			
-		case <- time.After(timeout):
-			
-			c.mu.Lock()
-			if isNumericID {
-				delete(c.ChannelsByNumber, requestNumberID)
-			} else {
-				delete(c.ChannelsByString, requestStringID)
-			}
-			c.mu.Unlock()
-			
-			// if a request still comes in with a certain id, then it will simply be ignored, memory is already cleaned up here anyway
-			
-			return nil, NewJSONRPCError(jsonRPCRequestTimeoutErrorCode, "Request timeout")
 	}
 }
-func (c *client) ReceiveBytes(data *[]byte) {
-	
-	var response JSONRPCResponse
-	err := json.Unmarshal(*data, &response)
-	
-	if err != nil {
-		c.emitResponse(&JSONRPCResponse{"2.0", nil, nil, NewJSONRPCError(jsonRPCParseErrorCode, "Parse error")})
-	} else {
-		c.ReceiveSingle(&response)
-	}
-}
-func (c *client) ReceiveString(data string) {
-	
-	arr := []byte(data)
-	c.ReceiveBytes(&arr)
-}
-func (c *client) ReceiveSingle(response *JSONRPCResponse) {
-	
-	c.emitResponse(response)
-}
-func (c *client) ReceiveMultiple(responses []*JSONRPCResponse) {
-	
-	for _, response := range responses {
-		
-		c.emitResponse(response)
-	}
-}
-func (c *client) emitResponse(response *JSONRPCResponse) {
+*/
+func (p *peer) emitResponse(response *Response) {
 	
 	if response == nil || response.ID == nil {
 		return // ignore this invalid response
@@ -423,8 +377,8 @@ func (c *client) emitResponse(response *JSONRPCResponse) {
 			isNumericID = true
 			
 			if math.IsNaN(responseNumberID) {
-				// NaN is not allowed, maybe a notification?
-				c.HandleNotification(response)
+				
+				// NaN is not allowed
 				return
 			}
 			
@@ -433,62 +387,402 @@ func (c *client) emitResponse(response *JSONRPCResponse) {
 			responseStringID = v
 			
 			if responseStringID == "" {
-				// empty string ID is not allowed, maybe a notification?
-				c.HandleNotification(response)
+				// empty string ID is not allowed
 				return
 			}
 		
 		default:
 			
 			// invalid ID type (must be string or float64)
-			// response ID is maybe absent or null, this must be a notification instead:
-			
-			c.HandleNotification(response)
+			// response ID is maybe absent or null
 			return
 	}
 	
 	if isNumericID {
 		
-		ch, ok := c.ChannelsByNumber[responseNumberID]
+		ch, ok := p.ChannelsByNumber[responseNumberID]
 		
 		if ok {
 			ch <- response
+			
+			close(ch)
 		
 		} // else: ignore unrecognized response ID, does not match a request ID
 	} else {
 		
-		ch, ok := c.ChannelsByString[responseStringID]
+		ch, ok := p.ChannelsByString[responseStringID]
 		
 		if ok {
 			ch <- response
-		
+			
+			close(ch)
+			
 		} // else: ignore unrecognized response ID, does not match a request ID
 	}
 }
+func (p *peer) WithIDGenerator(fn IDGenerator) Peer {
+	
+	p.GenerateID = fn
+	return p
+}
+func (p *peer) WithNotificationHandler(fn NotificationHandler) Peer {
+	
+	p.HandleNotification = fn
+	return p
+}
+func (p *peer) WithMessageSender(fn MessageSender) Peer {
+	
+	p.SendMessage = fn
+	return p
+}
+/*
+func (p *peer) WithBatchMessageSender(fn BatchMessageSender) Peer {
+	
+	p.SendBatchMessage = fn
+	return p
+}
+*/
+
+func (p *peer) ReceiveString(data string) {
+	
+	arr := []byte(data)
+	p.ReceiveBytes(&arr)
+}
+func (p *peer) ReceiveBytes(data *[]byte) {
+	
+	var message Message
+	err := json.Unmarshal(*data, &message)
+	
+	if err == nil {
+		
+		p.ReceiveMessage(&message)
+		return
+	}
+	
+	messageArray := make([]*Message, 0)
+	err = json.Unmarshal(*data, &messageArray)
+	
+	// possibly this is a batch of responses, currently this is not supported, since the client can also not send an array of requests as of now
+	// we must first implement client.RequestBatchBuilder().Append(method string, params any).Append(method string, params any).Commit()
+	// which is a convenient enclosure for client.RequestMultiple([]*Request) []*Response
+	// so we can do for _, response := range client.RequestBatchBuilder()...Commit() {
+	/*
+	if err == nil {
+		
+		p.ReceiveBatchMessage(messageArray)
+		return
+	}
+	*/
+}
+func (p *peer) ReceiveMessage(message *Message) {
+		
+	notification := NewNotificationFromMessage(message)
+	
+	if notification != nil {
+		
+		p.ReceiveNotification(notification)
+		return
+	}
+	
+	request := NewRequestFromMessage(message)
+	
+	if request != nil {
+		
+		p.ReceiveRequest(request)
+		return
+	}
+	
+	response := NewResponseFromMessage(message)
+	
+	if response != nil {
+		
+		p.ReceiveResponse(response)
+		return
+	}
+}
+/*
+func (p *peer) ReceiveBatchMessage(messages []*Message) {
+	
+	// the messages could be responses for a batch request array
+	// or the messages could be requests that we must process
+	
+	server_responses := make([]*Response, 0)
+	client_responses := make([]*Response, 0)
+	
+	for _, message := range messages {
+		
+		req := NewRequestFromMessage(message)
+		
+		if req != nil {
+			
+			res := p.processRequest(req)
+			
+			server_responses = append(server_responses, res)
+			
+			continue
+		}
+		
+		not := NewNotificationFromMessage(message)
+		
+		if not != nil {
+			
+			if p.HandleNotification != nil {
+				
+				p.HandleNotification(not)
+			}
+			
+			server_responses = append(server_responses, nil)
+			
+			continue
+		}
+		
+		res := NewResponseFromMessage(message)
+		
+		if res != nil {
+			
+			client_responses = append(client_responses, res)
+		}
+	}
+	
+	if len(server_responses) > 0 && p.SendBatchResponse != nil {
+		
+		p.SendBatchResponse(server_responses)
+	}
+	
+	if len(client_responses) > 0 {
+		
+		p.emitBatchResponse(client_responses)
+	}
+}
+*/
+func (p *peer) ReceiveRequest(request *Request) {
+	
+	if request != nil {
+		
+		response := p.processRequest(request)
+		
+		if p.SendMessage != nil {
+			
+			message := NewMessageFromResponse(response)
+			
+			p.SendMessage(message)
+		}
+	}
+}
+func (p *peer) ReceiveResponse(response *Response) {
+	
+	if response != nil {
+		
+		p.emitResponse(response)
+	}
+}
+func (p *peer) ReceiveNotification(notification *Notification) {
+	
+	if p.HandleNotification != nil {
+		
+		p.HandleNotification(notification)
+	}
+}
+
+func (p *peer) HasMethod(name string) bool {
+	
+	_, ok := p.Methods[name]
+	return ok
+}
+func (p *peer) AddMethod(name string, fn RequestHandler) {
+	
+	p.Methods[name] = fn
+}
+func (p *peer) RemoveMethod(name string) {
+	
+	delete(p.Methods, name)
+}
+func (p *peer) Notify(method string, params any) *Error {
+	
+	if p.SendMessage == nil {
+		
+		return &Error{Code: InternalErrorCode, Message: "Internal error: No MessageSender attached."}
+	}
+	
+	request := &Request{JSONRPC: "2.0", Method: method, Params: params}
+	
+	message := NewMessageFromRequest(request)
+	
+	return p.SendMessage(message)
+}
+func (p *peer) Request(method string, params any, timeout time.Duration) (*Response, *Error) {
+	
+	if p.SendMessage == nil {
+		
+		return nil, &Error{Code: InternalErrorCode, Message: "Internal error: No MessageSender attached."}
+	}
+	
+	ch := make(chan *Response, 1) // buffered
+	
+	requestID := p.GenerateID()
+	
+	if requestID == nil {
+		return nil, &Error{Code: InternalErrorCode, Message: "Internal error"}
+	}
+	
+	isNumericID := false
+	var requestNumberID float64
+	var requestStringID string
+	
+	switch v := requestID.(type) {
+		case float64:
+			
+			requestNumberID = v
+			isNumericID = true
+			
+			if math.IsNaN(requestNumberID) {
+				// NaN is not allowed
+				return nil, &Error{Code: InternalErrorCode, Message: "Internal error"}
+			}
+			
+		case string:
+			
+			requestStringID = v
+			
+			if requestStringID == "" {
+				// empty string ID is not allowed
+				return nil, &Error{Code: InternalErrorCode, Message: "Internal error"}
+			}
+		
+		default:
+			
+			// invalid ID type (must be string or float64)
+			return nil, &Error{Code: InternalErrorCode, Message: "Internal error"}
+	}
+	
+	p.mu.Lock()
+	if isNumericID {
+		
+		_, ok := p.ChannelsByNumber[requestNumberID]
+		
+		if ok {
+			// id already exists, that's very bad
+			return nil, &Error{Code: InternalErrorCode, Message: "Internal error"}
+		} else {
+			
+			p.ChannelsByNumber[requestNumberID] = ch
+		}
+		
+	} else {
+		
+		_, ok := p.ChannelsByString[requestStringID]
+		
+		if ok {
+			// id already exists, that's very bad
+			return nil, &Error{Code: InternalErrorCode, Message: "Internal error"}
+		} else {
+			
+			p.ChannelsByString[requestStringID] = ch
+		}
+	}
+	p.mu.Unlock()
+	
+	// build request, and pass request to the request sender
+	request := &Request{JSONRPC: "2.0", ID: requestID, Method: method, Params: params}
+	message := NewMessageFromRequest(request)
+	err := p.SendMessage(message)
+	
+	// if immediate error sending the request, passthrough the error
+	if err != nil {
+		
+		p.mu.Lock()
+		if isNumericID {
+			delete(p.ChannelsByNumber, requestNumberID)
+		} else {
+			delete(p.ChannelsByString, requestStringID)
+		}
+		p.mu.Unlock()
+		
+		return nil, err
+	}
+	
+	// return the result, or timeout err if timeout
+	select {
+		case res := <- ch:
+			
+			p.mu.Lock()
+			if isNumericID {
+				delete(p.ChannelsByNumber, requestNumberID)
+			} else {
+				delete(p.ChannelsByString, requestStringID)
+			}
+			p.mu.Unlock()
+			
+			if res.Error != nil {
+				return nil, res.Error
+			} else {
+				return res, nil
+			}
+			
+		case <- time.After(timeout):
+			
+			p.mu.Lock()
+			if isNumericID {
+				delete(p.ChannelsByNumber, requestNumberID)
+			} else {
+				delete(p.ChannelsByString, requestStringID)
+			}
+			p.mu.Unlock()
+			
+			// if a request still comes in with a certain id, then it will simply be ignored, memory is already cleaned up here anyway
+			
+			return nil, &Error{Code: RequestTimeoutErrorCode, Message: "Request timeout"}
+	}
+}
+
+
 
 // Main test example:
-/*func main() {
+/*
+func main() {
 	
 	log.Println("Main(): begin")
 	
-	server := NewJSONRPCServer(func (response *JSONRPCResponse) {
-		if response.Error != nil {
-			encodedResponse, _ := json.Marshal(*response)
-			fmt.Printf("Error Response: %+v\n", string(encodedResponse))
-		} else {
-			encodedResponse, _ := json.Marshal(*response)
-			fmt.Printf("Success Response: %+v\n", string(encodedResponse))
-		}
-	})
-	server.AddMethod("echo", func (requestParams interface{}) (*interface{}, *JSONRPCError) {
+	s := NewServer()
+	c := NewClient()
+	
+	s.WithMessageSender(func (message *Message) *Error {
 		
-		params := requestParams.(map[string]interface{})
+		encodedMessage, _ := json.Marshal(*message)
+		fmt.Printf("[s] Message being sent: %+v\n", string(encodedMessage))
+		
+		c.ReceiveBytes(&encodedMessage)
+		
+		return nil
+	})
+	
+	c.WithMessageSender(func (message *Message) *Error {
+		
+		encodedMessage, _ := json.Marshal(*message)
+		fmt.Printf("[c] Message being sent: %+v\n", string(encodedMessage))
+		
+		s.ReceiveBytes(&encodedMessage)
+		
+		return nil
+	})
+	
+	s.AddMethod("echo", func (requestParams any) (any, *Error) {
+		
+		params := requestParams.(map[string]any)
 		
 		return params["text"], nil
 	})
 	
-	incoming_message := `{"jsonrpc":"2.0","id":123,"method":"echo","params":{"text":"hello there"}}`
-	server.ReceiveString(incoming_message)
+	res, err := c.Request("echo", map[string]any{"text": "hello there"}, time.Duration(10) * time.Second)
+	
+	if err != nil {
+		
+		fmt.Printf("Client request error: %+v\n", err)
+	} else {
+		
+		fmt.Printf("Client request result: %+v\n", res)
+	}
 	
 	log.Println("Main(): end")
-}*/
+}
+*/
