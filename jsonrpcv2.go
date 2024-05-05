@@ -264,7 +264,7 @@ type Client interface {
 	WithMessageSender(MessageSender) Peer
 //	WithBatchMessageSender(BatchMessageSender) Peer
 	
-	Request(string, any, time.Duration, ...any) (*Response, *Error) // with timeout
+	Request(string, any, time.Duration, ...any) (any, *Error) // with timeout
 	Notify(string, any, ...any) *Error // won't expect any response
 	
 	ReceiveString(string)
@@ -290,7 +290,7 @@ type Peer interface {
 	RemoveMethod(string)
 	
 	// Client:
-	Request(string, any, time.Duration, ...any) (*Response, *Error) // with timeout
+	Request(string, any, time.Duration, ...any) (any, *Error) // with timeout
 	Notify(string, any, ...any) *Error // won't expect any response
 	
 	ReceiveString(string)
@@ -615,7 +615,7 @@ func (p *peer) Notify(method string, params any, options ...any) *Error {
 	
 	return p.SendMessage(message, options)
 }
-func (p *peer) Request(method string, params any, timeout time.Duration, options ...any) (*Response, *Error) {
+func (p *peer) Request(method string, params any, timeout time.Duration, options ...any) (any, *Error) {
 	
 	if p.SendMessage == nil {
 		
@@ -725,7 +725,7 @@ func (p *peer) Request(method string, params any, timeout time.Duration, options
 			if res.Error != nil {
 				return nil, res.Error
 			} else {
-				return res, nil
+				return res.Result, nil
 			}
 			
 		case <- time.After(timeout):
