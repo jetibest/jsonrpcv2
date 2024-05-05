@@ -90,6 +90,7 @@ func NewNotificationFromMessage(message *Message) *Notification {
 		switch message.Method.(type) {
 			
 			case string:
+				break
 			default:
 				// Method must be string type, or else Message is not a valid Notification
 				return nil
@@ -150,6 +151,7 @@ func NewRequestFromMessage(message *Message) *Request {
 		switch message.Method.(type) {
 			
 			case string:
+				break
 			default:
 				// Method must be string type, or else Message is not a valid Request
 				return nil
@@ -382,6 +384,8 @@ func (p *peer) emitResponse(response *Response) {
 				return
 			}
 			
+			break
+			
 		case string:
 			
 			responseStringID = v
@@ -390,6 +394,8 @@ func (p *peer) emitResponse(response *Response) {
 				// empty string ID is not allowed
 				return
 			}
+			
+			break
 		
 		default:
 			
@@ -640,6 +646,8 @@ func (p *peer) Request(method string, params any, timeout time.Duration) (*Respo
 				return nil, &Error{Code: InternalErrorCode, Message: "Internal error"}
 			}
 			
+			break
+			
 		case string:
 			
 			requestStringID = v
@@ -648,6 +656,8 @@ func (p *peer) Request(method string, params any, timeout time.Duration) (*Respo
 				// empty string ID is not allowed
 				return nil, &Error{Code: InternalErrorCode, Message: "Internal error"}
 			}
+			
+			break
 		
 		default:
 			
